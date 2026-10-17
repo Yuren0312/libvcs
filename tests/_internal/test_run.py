@@ -40,6 +40,47 @@ def test_normalize_command_args_coerces_pathlike() -> None:
     assert _normalize_command_args([path, "status"]) == ["example", "status"]
 
 
+def test_run_errors_parameter_does_not_crash() -> None:
+    """``errors=`` decodes captured output instead of flipping Popen to text mode.
+
+    Passing ``errors=`` reached ``subprocess.Popen``, which enabled text mode
+    despite ``text=False``; the bytes-only reader then crashed joining ``str``
+    chunks. It now only controls the final decode.
+    """
+    output = run([sys.executable, "-c", "print('hello')"], errors="replace")
+    assert "hello" in output
+
+
+def test_run_encoding_parameter_decodes_byte_faithfully() -> None:
+    """``encoding=`` decodes every byte, so captured output round-trips.
+
+    Non-UTF-8 output used to be rewritten by ``backslashreplace``, which is not
+    round-trippable; an explicit codec keeps the original bytes recoverable.
+    """
+    script = "import sys; sys.stdout.buffer.write(b'caf\\xe9\\n')"
+    output = run([sys.executable, "-c", script], encoding="latin-1")
+    assert output == "caf\xe9\n"
+
+
+def test_run_errors_parameter_round_trips_non_utf8_bytes() -> None:
+    """``errors='surrogateescape'`` keeps non-UTF-8 output byte-recoverable."""
+    script = "import sys; sys.stdout.buffer.write(b'caf\\xe9\\n')"
+    output = run(
+        [sys.executable, "-c", script],
+        encoding="utf-8",
+        errors="surrogateescape",
+    )
+    assert output.encode("utf-8", errors="surrogateescape") == b"caf\xe9\n"
+
+
+def test_console_to_str_encoding_and_errors() -> None:
+    """``console_to_str`` honours explicit ``encoding`` and ``errors`` knobs."""
+    raw = b"caf\xe9"
+    assert run_module.console_to_str(raw, encoding="latin-1") == "caf\xe9"
+    decoded = run_module.console_to_str(raw, encoding="utf-8", errors="surrogateescape")
+    assert decoded.encode("utf-8", errors="surrogateescape") == raw
+
+
 def test_run_without_timeout_matches_legacy_behavior() -> None:
     """Leaving ``timeout=None`` preserves the pre-timeout call semantics."""
     output = run([sys.executable, "-c", "print('hello'); print('world')"])

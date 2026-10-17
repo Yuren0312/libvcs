@@ -29,12 +29,26 @@ logger = logging.getLogger(__name__)
 console_encoding = sys.stdout.encoding
 
 
-def console_to_str(s: bytes) -> str:
-    """From pypa/pip project, pip.backwardwardcompat. License MIT."""
+def console_to_str(
+    s: bytes, *, encoding: str | None = None, errors: str | None = None
+) -> str:
+    """Decode ``s`` into ``str`` for caller consumption.
+
+    With ``encoding`` and ``errors`` omitted, decode using the process console
+    encoding and fall back to UTF-8 with ``backslashreplace`` on undecodable
+    bytes (the legacy behaviour). Pass ``encoding`` to decode with a specific
+    codec, or ``errors`` (for example ``surrogateescape``) to control how
+    undecodable bytes are handled, so output that is not valid in the console
+    encoding can round-trip byte-faithfully.
+
+    From pypa/pip project, pip.backwardwardcompat. License MIT.
+    """
+    if encoding is not None:
+        return s.decode(encoding, errors=errors or "strict")
     try:
-        return s.decode(console_encoding)
+        return s.decode(console_encoding, errors=errors or "strict")
     except UnicodeDecodeError:
-        return s.decode("utf_8", errors="backslashreplace")
+        return s.decode("utf_8", errors=errors or "backslashreplace")
     except AttributeError:  # for tests, #13
         return str(s)
 
@@ -182,12 +196,27 @@ def run(
     trailing whitespace from the whole output for convenient "bare value" reads
     where a trailing newline is just noise (e.g. ``rev-parse HEAD``).
 
-    Keyword arguments are passthrough to :class:`subprocess.Popen`.
+    Keyword arguments are passthrough to :class:`subprocess.Popen`, except
+    ``encoding`` and ``errors``, which control the final decode of the
+    captured output (see below) and are never forwarded to ``Popen``.
 
     Parameters
     ----------
     args : list or str, or single str, if shell=True
        the command to run
+
+    encoding : str, optional
+        Codec used to decode the captured stdout/stderr into the returned
+        ``str``. When ``None`` (the default), the process console encoding is
+        tried and undecodable bytes fall back to UTF-8 with ``backslashreplace``.
+        Pass a codec (for example ``latin-1``) to decode byte-faithfully so the
+        output can be re-encoded losslessly.
+
+    errors : str, optional
+        Error handler used when decoding the captured output, for example
+        ``surrogateescape`` to round-trip bytes that are not valid in the
+        chosen codec. When ``None``, ``strict`` applies (or ``backslashreplace``
+        for the implicit console-encoding fallback).
 
     shell : bool
         boolean indicating whether we are using advanced shell
@@ -258,8 +287,6 @@ def run(
         start_new_session=start_new_session,
         pass_fds=pass_fds,
         text=False,  # Keep in bytes mode to preserve \r properly
-        encoding=encoding,
-        errors=errors,
         user=user,
         group=group,
         extra_groups=extra_groups,
@@ -304,6 +331,8 @@ def run(
             timeout=timeout,
             callback=callback,
             cmd=_stringify_command(normalized_args),
+            encoding=encoding,
+            errors=errors,
         )
     if callback and callable(callback):
         callback(output="\r", timestamp=datetime.datetime.now(tz=datetime.timezone.utc))
@@ -314,7 +343,7 @@ def run(
             if timeout_stdout is not None
             else b"".join(proc.stdout.readlines())
         )
-        all_output = console_to_str(raw_stdout)
+        all_output = console_to_str(raw_stdout, encoding=encoding, errors=errors)
         if trim:
             all_output = all_output.rstrip()
     else:
@@ -325,7 +354,7 @@ def run(
             if timeout_stderr is not None
             else b"".join(proc.stderr.readlines())
         )
-        all_output = console_to_str(raw_stderr)
+        all_output = console_to_str(raw_stderr, encoding=encoding, errors=errors)
         if trim:
             all_output = all_output.rstrip()
     output = "".join(all_output)
@@ -352,6 +381,8 @@ def _wait_with_deadline(
     timeout: float,
     callback: ProgressCallbackProtocol | None,
     cmd: str | list[str],
+    encoding: str | None,
+    errors: str | None,
 ) -> tuple[int, bytes | None, bytes | None]:
     """Wait for ``proc`` to exit, enforcing a wall-clock deadline.
 
@@ -446,7 +477,11 @@ def _wait_with_deadline(
                         buffers[stream].append(trailing)
                 stdout_data = _join_buffer(buffers, proc.stdout)
                 stderr_data = _join_buffer(buffers, proc.stderr)
-                message = console_to_str((stdout_data or b"") + (stderr_data or b""))
+                message = console_to_str(
+                    (stdout_data or b"") + (stderr_data or b""),
+                    encoding=encoding,
+                    errors=errors,
+                )
                 raise exc.CommandTimeoutError(
                     output=message,
                     returncode=proc.returncode,

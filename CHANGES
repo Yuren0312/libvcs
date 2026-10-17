@@ -20,6 +20,22 @@ $ uv add libvcs --prerelease allow
 _Notes on the upcoming release will go here._
 <!-- END PLACEHOLDER - ADD NEW CHANGELOG ENTRIES BELOW THIS LINE -->
 
+### Fixes
+
+#### `run()` honors `encoding`/`errors` at the decode boundary (#541, #542)
+
+`Git.run()` (and the other command wrappers) forwarded `encoding=` and
+`errors=` to `subprocess.Popen`, which flips the pipe into text mode despite
+`text=False`; any command that produced output then crashed joining `str`
+chunks into bytes. Captured output was also decoded through a
+`backslashreplace` fallback that rewrote undecodable bytes as the literal
+`\xNN` text, so a `git diff` of non-UTF-8 content could no longer be applied.
+
+The two parameters now control the final decode of the captured output and are
+never passed to `Popen`. Pass `encoding=` (for example `latin-1`) or `errors=`
+(for example `surrogateescape`) to keep byte-faithful output round-trippable.
+The default behaviour is unchanged.
+
 ## libvcs 0.46.0 (2026-08-30)
 
 libvcs 0.46.0 hardens the command wrappers against argument injection: `Git.pull()`, a `GitSync` revision, and `Svn.checkout()` now reject a value a VCS binary would parse as an option in the positions an end-of-options `--` cannot guard, closing paths that could otherwise run a command or truncate a file. It also gives progress-callback timestamps an aware UTC value, documents what every field holds in the API reference, and moves the lint and CI toolchain to current majors.
